@@ -2,34 +2,50 @@ package com.adrimb200.garageobd.data
 
 import java.util.Locale
 
-/** Interpreta respuestas genéricas SAE J1979. No cubre protocolos del fabricante. */
+/** PIDs genéricos SAE J1979, respuestas compactas y separadas por espacios. */
 object ObdParser {
-    /** Admite `41 0C 1A F8` y `410C1AF8`, incluso con eco `010C`. */
-    private fun pidBytes(response: String, pid: String, size: Int): List<Int>? {
+    private fun pidBytes(response: String, pid: Int, length: Int): List<Int>? {
         val clean = response.uppercase(Locale.ROOT)
-        val pattern = Regex("41\\s*${pid.uppercase(Locale.ROOT)}((?:\\s*[0-9A-F]{2}){$size})")
-        val found = pattern.find(clean) ?: return null
-        val values = found.groupValues[1].replace(Regex("\\s"), "")
-        if (values.length != size * 2) return null
-        return (0 until size).map { i -> values.substring(i * 2, i * 2 + 2).toInt(16) }
+        val hexPid = "%02X".format(Locale.ROOT, pid)
+        val match = Regex("41\\s*$hexPid((?:\\s*[0-9A-F]{2}){$length})").find(clean) ?: return null
+        val hex = match.groupValues[1].replace(Regex("\\s"), "")
+        if (hex.length != length * 2) return null
+        return (0 until length).map { i -> hex.substring(i * 2, i * 2 + 2).toInt(16) }
     }
 
-    fun rpm(response: String): Int? {
-        val values = pidBytes(response, "0C", 2) ?: return null
-        return ((values[0] * 256) + values[1]) / 4
+    fun rpm(response: String): Int? = value(response, ObdSensor.RPM)?.toInt()
+    fun coolant(response: String): Int? = value(response, ObdSensor.COOLANT)?.toInt()
+    fun speed(response: String): Int? = value(response, ObdSensor.SPEED)?.toInt()
+    fun hasEngineResponse(response: String): Boolean = pidBytes(response, 0x00, 4) != null
+
+    fun value(response: String, sensor: ObdSensor): Double? {
+        val bytes = pidBytes(response, sensor.pid, if (sensor == ObdSensor.MAF || sensor == ObdSensor.ECU_VOLTAGE || sensor == ObdSensor.RPM) 2 else 1)
+            ?: return null
+        val a = bytes[0]
+        val b = bytes.getOrElse(1) { 0 }
+        return when (sensor) {
+            ObdSensor.RPM -> (256.0 * a + b) / 4.0
+            ObdSensor.COOLANT, ObdSensor.IAT -> (a - 40).toDouble()
+            ObdSensor.SPEED, ObdSensor.MAP -> a.toDouble()
+            ObdSensor.LOAD, ObdSensor.THROTTLE -> a * 100.0 / 255.0
+            ObdSensor.MAF -> (256.0 * a + b) / 100.0
+            ObdSensor.TIMING -> a / 2.0 - 64.0
+            ObdSensor.STFT, ObdSensor.LTFT -> 100.0 * a / 128.0 - 100.0
+            ObdSensor.ECU_VOLTAGE -> (256.0 * a + b) / 1000.0
+        }
     }
 
-    fun coolant(response: String): Int? = pidBytes(response, "05", 1)?.firstOrNull()?.minus(40)
+    /** Máscara de capacidades 0100/0120/0140. Bit más alto -> primer PID de la página. */
+    fun supportedPidPage(response: String, base: Int): Set<Int>? {
+        require(base == 0 || base == 0x20 || base == 0x40)
+        val bytes = pidBytes(response, base, 4) ?: return null
+        val mask = bytes.fold(0L) { acc, byte -> (acc shl 8) or byte.toLong() }
+        return (1..32).filter { index ->
+            mask and (1L shl (32 - index)) != 0L
+        }.map { base + it }.toSet()
+    }
 
-    fun speed(response: String): Int? = pidBytes(response, "0D", 1)?.firstOrNull()
-
-    /** Para detectar que el adaptador ve la ECU: `41 00` con 4 bytes de capacidades. */
-    fun hasEngineResponse(response: String): Boolean = pidBytes(response, "00", 4) != null
-
-    /**
-     * Respuestas MODE 03 sencillas: 43 01 33 00 00 -> P0133.
-     * Puede haber encabezados o varias líneas, pero no se decodifica ISO-TP complejo.
-     */
+    /** Respuestas de DTC genéricos simples; sin decodificación completa ISO-TP. */
     fun storedDtcs(response: String): List<String> {
         val all = mutableListOf<String>()
         response.uppercase(Locale.ROOT).replace("\r", "\n").lines().forEach { line ->
@@ -45,8 +61,7 @@ object ObdParser {
                     val second = block.substring(2, 4).toInt(16)
                     val prefix = "PCBU"[(first ushr 6) and 3]
                     val digit = (first ushr 4) and 3
-                    val code = "%c%d%01X%02X".format(Locale.ROOT, prefix, digit, first and 15, second)
-                    all.add(code)
+                    all.add("%c%d%01X%02X".format(Locale.ROOT, prefix, digit, first and 15, second))
                 }
             }
         }

@@ -87,13 +87,13 @@ fun GarageScreen(
             containerColor = Base,
             bottomBar = {
                 NavigationBar(containerColor = Panel) {
-                    listOf("Panel", "Conexión", "Averías").forEachIndexed { index, label ->
+                    listOf("Panel", "Relojes", "Conexión", "Averías").forEachIndexed { index, label ->
                         NavigationBarItem(
                             selected = selected == index,
                             onClick = { selected = index },
                             icon = {
                                 Text(
-                                    when (index) { 0 -> "◉"; 1 -> "⌁"; else -> "⚙" },
+                                    when (index) { 0 -> "◉"; 1 -> "◴"; 2 -> "⌁"; else -> "⚙" },
                                     fontSize = 23.sp
                                 )
                             },
@@ -119,8 +119,10 @@ fun GarageScreen(
                     }
                     when (selected) {
                         0 -> DashboardTab(state, onDemo = vm::startDemo,
-                            onConnectPage = { selected = 1 }, onDisconnect = vm::disconnect)
-                        1 -> ConnectionTab(
+                            onConnectPage = { selected = 2 }, onDisconnect = vm::disconnect)
+                        1 -> GaugesTab(state = state, onToggle = vm::toggleGauge,
+                            onOpenConnection = { selected = 2 })
+                        2 -> ConnectionTab(
                             state = state,
                             permissionGranted = permissionGranted,
                             bluetoothAvailable = vm.bluetoothPresent(),
@@ -133,10 +135,10 @@ fun GarageScreen(
                             onDemo = vm::startDemo
                         )
                         else -> FaultTab(state, onRead = vm::readFaultCodes,
-                            onConnectPage = { selected = 1 })
+                            onConnectPage = { selected = 2 })
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text("GarageOBD · v0.1  •  Lectura OBD-II genérica · Sin servidor",
+                    Text("GarageOBD · v0.2  •  Lectura OBD-II genérica · Sin servidor",
                         fontSize = 11.sp, color = Subtle)
                 }
             }
@@ -341,6 +343,16 @@ private fun ConnectionTab(
             }
         }
     }
+    if (state.status == ConnectionStatus.CONNECTED) {
+        CardPanel {
+            Label("IDENTIFICACIÓN ELM327")
+            Text("Firmware comunicado: ${state.elmVersion}", color = Light, fontSize = 13.sp)
+            Text("Protocolo: ${state.obdProtocol}", color = Subtle, fontSize = 13.sp)
+            Text("PIDs anunciados por la ECU: ${state.supportedPids?.size ?: 0}", color = Subtle, fontSize = 12.sp)
+            Text("La identificación que comunica un clon no garantiza su versión interna real.",
+                color = Subtle, fontSize = 11.sp)
+        }
+    }
     CardPanel {
         Label("SIN CONECTAR UN COCHE")
         Text("Modo de demostración", fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -353,7 +365,7 @@ private fun ConnectionTab(
         Text("1. Enchufa el ELM327 con el coche estacionado.", color = Light, fontSize = 13.sp)
         Text("2. Empareja el adaptador desde Ajustes > Bluetooth.", color = Light, fontSize = 13.sp)
         Text("3. Activa contacto / motor y selecciona el dispositivo aquí.", color = Light, fontSize = 13.sp)
-        Text("El PIN suele ser 1234 o 0000; depende del adaptador. No todos los ELM327 baratos implementan correctamente SPP.",
+        Text("Aoocci vende versiones Bluetooth (Android) y Wi-Fi (Android/iOS). Este proyecto se conecta únicamente a la Bluetooth clásica SPP. PIN habitual: 1234 o 0000.",
             color = Subtle, fontSize = 12.sp)
     }
 }

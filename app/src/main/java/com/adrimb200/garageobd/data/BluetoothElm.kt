@@ -19,6 +19,13 @@ import kotlinx.coroutines.withTimeout
 import java.io.IOException
 import java.util.UUID
 
+/** Identificación disponible del adaptador y protocolo negociado. No certifica que sea un ELM original. */
+data class ElmConnectionInfo(
+    val supportedPids: Set<Int>,
+    val adapterVersion: String,
+    val protocol: String
+)
+
 /** Un registro simple de un adaptador previamente emparejado con Android. */
 data class PairedDevice(val name: String, val address: String)
 
@@ -80,17 +87,40 @@ class BluetoothElm(context: Context) {
         throw IOException("No se pudo abrir Bluetooth SPP. Comprueba el emparejamiento y que el ELM327 no esté ocupado.", firstFailure)
     }
 
-    suspend fun initialize() {
+    suspend fun initialize(): ElmConnectionInfo {
         execute("ATZ", 7_000)
         execute("ATE0")
         execute("ATL0")
         execute("ATS0")
         execute("ATH0")
         execute("ATSP0") // Selección automática del protocolo OBD.
-        val confirmation = execute("0100", 15_000)
+        // Algunos clones y ECUs lentas necesitan un segundo intento durante la negociación.
+        var confirmation = execute("0100", 15_000)
         if (!ObdParser.hasEngineResponse(confirmation)) {
-            throw IOException("El ELM327 responde, pero la ECU no devuelve datos OBD-II. Comprueba el contacto, el motor y la compatibilidad. Respuesta: ${confirmation.take(80)}")
+            delay(450)
+            confirmation = execute("0100", 15_000)
         }
+        val initial = ObdParser.supportedPidPage(confirmation, 0)
+            ?: throw IOException("El ELM327 responde, pero la ECU no devuelve 0100. Comprueba el contacto y la compatibilidad. Respuesta: ${confirmation.take(80)}")
+        val supported = initial.toMutableSet()
+        // Consultamos la página siguiente SOLO si la ECU anuncia que existe.
+        if (0x20 in supported) {
+            val extended = ObdParser.supportedPidPage(execute("0120", 9_000), 0x20)
+            if (extended != null) {
+                supported.addAll(extended)
+                if (0x40 in extended) {
+                    ObdParser.supportedPidPage(execute("0140", 9_000), 0x40)?.let(supported::addAll)
+                }
+            }
+        }
+        // ATI y ATDP son informativos; algunos clones responden '?' y se indica sin datos.
+        val version = try { execute("ATI", 3_500).trim() } catch (_: Exception) { "" }
+        val protocol = try { execute("ATDP", 3_500).trim() } catch (_: Exception) { "" }
+        return ElmConnectionInfo(
+            supportedPids = supported,
+            adapterVersion = version.takeIf { it.isNotEmpty() && it != "?" }?.take(60) ?: "No identificada",
+            protocol = protocol.takeIf { it.isNotEmpty() && it != "?" }?.take(60) ?: "Auto (no informado)"
+        )
     }
 
     /** Envía un comando y espera el prompt `>`; jamás intercala comandos. */
